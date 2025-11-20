@@ -78,38 +78,28 @@ function PullMsg {
 function sendMsg {
     param([string]$Message)
 
-    if (-not $Message) { $Message = " " }
-
-    # Принудительно UTF-8 + убираем нулевые байты
-    $Message = [System.Text.Encoding]::UTF8.GetString([System.Text.Encoding]::UTF8.GetBytes($Message))
-
-    # Экранируем обратные кавычки (чтобы не ломался markdown)
-    $Message = $Message -replace '`', 'ˋ'
+    if ($Message -eq $null -or $Message -eq "") { return }
 
     $url = "https://discord.com/api/v9/channels/$chan/messages"
-    $boundary = [System.Guid]::NewGuid().ToString()
-    $LF = "`r`n"
 
-    $bodyLines = @()
-    $bodyLines += "--$boundary"
-    $bodyLines += 'Content-Disposition: form-data; name="payload_json"'
-    $bodyLines += ""
-    $payload = @{ content = $Message } | ConvertTo-Json -Compress
-    $bodyLines += $payload
-    $bodyLines += "--$boundary--"
-    $body = $bodyLines -join $LF
+    # Escape JSON-breaking characters
+    $Escaped = $Message.Replace("\", "\\").Replace("`"", "\""`"")
 
-    $headers = @{
-        "Authorization" = "Bot $token"
-        "Content-Type"  = "multipart/form-data; boundary=$boundary"
-    }
+    $jsonBody = @{
+        content = $Escaped
+        username = "Agent"
+    } | ConvertTo-Json -Depth 4
+
+    $webClient = New-Object System.Net.WebClient
+    $webClient.Headers.Add("Authorization", "Bot $token")
+    $webClient.Headers.Add("Content-Type", "application/json; charset=utf-8")
+    $webClient.Encoding = [System.Text.Encoding]::UTF8
 
     try {
-        Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body | Out-Null
-    } catch {
-        # Если всё равно 400 — отправляем просто как текст без markdown
-        $payload = @{ content = "```Ошибка отправки большого вывода```" } | ConvertTo-Json -Compress
-        Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body ("--$boundary$LFContent-Disposition: form-data; name=`"payload_json`"$LF$LF$payload$LF--$boundary--") | Out-Null
+        $null = $webClient.UploadString($url, "POST", $jsonBody)
+    }
+    catch {
+        Write-Host "Discord error:" $_.Exception.Message
     }
 }
 
@@ -175,5 +165,6 @@ while ($true) {
     }
     sleep 5
 }
+
 
 
